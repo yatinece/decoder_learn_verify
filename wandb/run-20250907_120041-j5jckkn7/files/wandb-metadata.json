@@ -1,0 +1,13 @@
+{
+  "os": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "python": "CPython 3.11.12",
+  "startedAt": "2025-09-07T12:00:41.170832Z",
+  "program": "/workspaces/TF_Train/testwnb.py",
+  "codePath": "testwnb.py",
+  "codePathLocal": "testwnb.py",
+  "email": "yatinece@gmail.com",
+  "root": "/workspaces/TF_Train",
+  "host": "fe8f901ad710",
+  "executable": "/opt/conda/bin/python",
+  "writerId": "xapv9x6yu7y7imua8b7b6av5hor2ru5q"
+}

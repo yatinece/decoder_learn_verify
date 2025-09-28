@@ -1,0 +1,6 @@
+{
+  "name": "llm-train",
+  "image": "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-devel",
+  "runArgs": ["--gpus", "all"],
+  "postCreateCommand": "pip install -r requirements.txt"
+}

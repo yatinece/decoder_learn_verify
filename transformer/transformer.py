@@ -7,6 +7,7 @@ from config.ConfigFile import Config
 from Tokenizer.BpeToken import BpeTokenizer
 import math
 from tqdm import tqdm
+import wandb
 
 def get_device():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -177,7 +178,7 @@ class TransformerDecoderBlock(nn.Module):
 
 
 class TransformerDecoder(nn.Module):
-    def __init__(self, vocab_size, embed_dim, num_heads, ffn_dim, num_blocks , max_length, dropout=0.1, type_pos_emb="learnable"):
+    def __init__(self, vocab_size, embed_dim, num_heads, ffn_dim, num_blocks , max_length, dropout=0.1, type_pos_emb="learnable", tied_emb = 0 ):
         super(TransformerDecoder, self).__init__()
         self.vocab_size = vocab_size
         self.embed_dim = embed_dim
@@ -190,7 +191,11 @@ class TransformerDecoder(nn.Module):
         self.embedding_layer = EmbeddingLayer(self.vocab_size, self.embed_dim)
         self.pos_embedding_layer = PositionEmbeddingLayer(self.max_length, self.embed_dim)
         self.block_layers = nn.ModuleList(TransformerDecoderBlock(self.embed_dim, self.num_heads, self.ffn_dim, self.dropout) for _ in range(num_blocks) )
-        self.fc_out = nn.Linear(embed_dim, vocab_size)
+        if tied_emb == 0 : 
+            self.fc_out = nn.Linear(embed_dim, vocab_size , bias=False)
+        else :
+            self.fc_out = nn.Linear(embed_dim, vocab_size , bias=False)
+            self.fc_out.weight = self.embedding_layer.embed_layer.weight
         self.dropout = nn.Dropout(dropout)
 
 
@@ -215,6 +220,24 @@ class TransformerDecoder(nn.Module):
         output = self.fc_out(x)
         return output, attn_weights_list
 
+def count_parameters(model, detailed=True):
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Total number of parameters: {total_params:,}")
+    
+    if detailed:
+        print("\nDetailed parameter breakdown:")
+        print("-" * 50)
+        for name, module in model.named_modules():
+            if isinstance(module, (nn.Embedding, nn.Linear, nn.LayerNorm)):
+                module_params = sum(p.numel() for p in module.parameters())
+                print(f"{name}: {module_params:,} parameters")
+        print("-" * 50)
+    
+    # Verify tied embeddings
+    if hasattr(model, 'fc_out') and hasattr(model, 'embedding_layer'):
+        tied = id(model.fc_out.weight) == id(model.embedding_layer.embed_layer.weight)
+        print(f"Word embedding and fc_out weights are {'tied' if tied else 'not tied'}")
+    
 
 if __name__ == "__main__":
     
@@ -243,27 +266,47 @@ if __name__ == "__main__":
     dropout = 0.1
     ffn_dim = embed_dim*3
     num_blocks= 4
+    lr=0.001
     type_pos_emb="learnable"
+    epochs = 3
+    tied_emb = 1
     print(f"Current stats for max_length : {max_length} , batch_size : {batch_size} , vocab_size : {vocab_size}  , data_length : {len(data)}")
 
     print(f"Current stats for num_embeddings : {vocab_size} , embedding_dim : {embed_dim} ")
-
+    wandb.init(project="transformer_training", name="run_transformer", config={
+        "vocab_size": vocab_size,
+        "embed_dim": embed_dim,
+        "num_heads": num_heads,
+        "ffn_dim": ffn_dim,
+        "num_blocks": num_blocks,
+        "max_length": max_length,
+        "batch_size": batch_size,
+        "epochs": epochs,
+        "learning_rate": 0.001,
+        "dropout": lr,
+        "scheduler": "CosineAnnealingLR",
+        "tied_emb" : tied_emb
+    })
     device= get_device()
     decoder_att = TransformerDecoder(vocab_size=vocab_size, embed_dim=embed_dim, num_heads=num_heads, \
-                            ffn_dim = ffn_dim, num_blocks= num_blocks, max_length =max_length ,dropout=dropout , type_pos_emb=type_pos_emb).to(device)
-
+                            ffn_dim = ffn_dim, num_blocks= num_blocks, max_length =max_length ,dropout=dropout , type_pos_emb=type_pos_emb , tied_emb =tied_emb).to(device)
+        # Print total parameters and log to W&B
+    total_params = count_parameters(decoder_att, detailed=True)
+    wandb.config.update({"total_parameters": total_params})
     # optimizer 
-    optimizer = torch.optim.Adam(decoder_att.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(decoder_att.parameters(), lr=lr)
     # loss
     loss_fn = nn.CrossEntropyLoss(ignore_index=0)
     best_val_loss = float('inf')
-    epochs = 3
+    
     checpoint_path = os.path.join(data_path, "best_run/")
     os.makedirs(checpoint_path , exist_ok=True)
     checkpoint_path = os.path.join(data_path, "best_model_dict.pt")
     full_model_path = os.path.join(data_path, "best_model_full.pt")
     
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+
+    global_step = 0  # For W&B per-batch logging
     for epoch in range(epochs):
         decoder_att.train()
         train_loss = 0.0
@@ -282,10 +325,51 @@ if __name__ == "__main__":
             pbar.set_postfix({'Batch Loss': f'{loss.item():.4f}'})
             optimizer.zero_grad()
             loss.backward()
+
+            # Compute gradient norms: total, per-layer, embeddings
+            grad_norm_total = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in decoder_att.parameters() if p.grad is not None))
+            grad_norm_word_emb = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in decoder_att.embedding_layer.parameters() if p.grad is not None))
+            grad_norm_pos_emb = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in decoder_att.pos_embedding_layer.parameters() if p.grad is not None))
+            grad_norm_fc_out = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in decoder_att.fc_out.parameters() if p.grad is not None))
+            grad_norms = {
+                "Train/Grad_Norm_Word_Embedding": grad_norm_word_emb.item(),
+                "Train/Grad_Norm_Pos_Embedding": grad_norm_pos_emb.item(),
+                "Train/Grad_Norm_FC_Out": grad_norm_fc_out.item(),
+                "Train/Grad_Norm_Total": grad_norm_total.item()
+            }
+
+            for i, block in enumerate(decoder_att.block_layers):
+                grad_norm_attn = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in block.attention_block.parameters() if p.grad is not None))
+                grad_norm_ffn = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in block.ffn.parameters() if p.grad is not None))
+                grad_norm_norm1 = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in block.norm1.parameters() if p.grad is not None))
+                grad_norm_norm2 = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in block.norm2.parameters() if p.grad is not None))
+                grad_norm_q_linear = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in block.attention_block.q_linear.parameters() if p.grad is not None))
+                grad_norm_k_linear = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in block.attention_block.k_linear.parameters() if p.grad is not None))
+                grad_norm_v_linear = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in block.attention_block.v_linear.parameters() if p.grad is not None))
+                grad_norm_out_linear = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in block.attention_block.out_linear.parameters() if p.grad is not None))
+                grad_norms[f"Train/Grad_Norm_Attention_Block{i}"] = grad_norm_attn.item()
+                grad_norms[f"Train/Grad_Norm_FFN_Block{i}"] = grad_norm_ffn.item()
+                grad_norms[f"Train/Grad_Norm_LayerNorm1_Block{i}"] = grad_norm_norm1.item()
+                grad_norms[f"Train/Grad_Norm_LayerNorm2_Block{i}"] = grad_norm_norm2.item()
+                grad_norms[f"Train/Grad_Norm_Q_Linear_Block{i}"] = grad_norm_q_linear.item()
+                grad_norms[f"Train/Grad_Norm_K_Linear_Block{i}"] = grad_norm_k_linear.item()
+                grad_norms[f"Train/Grad_Norm_V_Linear_Block{i}"] = grad_norm_v_linear.item()
+                grad_norms[f"Train/Grad_Norm_Out_Linear_Block{i}"] = grad_norm_out_linear.item()
+
+            wandb.log({
+                "Train/Batch_Loss": loss.item(),
+                **grad_norms
+            }, step=global_step)
             optimizer.step()
             train_loss += loss.item()
+            global_step += 1
         train_loss /= train_batches
         train_perplexity = math.exp(train_loss)
+        wandb.log({
+            "Train/Epoch_Loss": train_loss,
+            "Train/Perplexity": train_perplexity,
+            "Learning_Rate": scheduler.get_last_lr()[0]
+        }, step=global_step)
         print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Train Perplexity: {train_perplexity:.4f}, LR: {scheduler.get_last_lr()[0]:.6f}")
 
         # Validation loop
@@ -306,10 +390,16 @@ if __name__ == "__main__":
 
                 loss = loss_fn(output[:, :-1, :].reshape(-1, vocab_size), batch_tensor[:, 1:].reshape(-1))
                 pbar.set_postfix({'Batch Loss': f'{loss.item():.4f}'})
+                wandb.log({"Val/Batch_Loss": loss.item()}, step=global_step)
                 val_loss += loss.item()
-        val_loss /= val_batches
-        val_perplexity = math.exp(val_loss)
-        print(f"Epoch {epoch+1}, Val Loss: {val_loss:.4f}, Val Perplexity: {val_perplexity:.4f}")
+                global_step += 1
+            val_loss /= val_batches
+            val_perplexity = math.exp(val_loss)
+            wandb.log({
+                "Val/Epoch_Loss": val_loss,
+                "Val/Perplexity": val_perplexity
+            }, step=global_step)
+            print(f"Epoch {epoch+1}, Val Loss: {val_loss:.4f}, Val Perplexity: {val_perplexity:.4f}")
 
         # Checkpointing
         if val_loss < best_val_loss:
@@ -324,40 +414,6 @@ if __name__ == "__main__":
             print(f"Saved best model at epoch {epoch+1} with Val Loss: {val_loss:.4f}")
 
         scheduler.step()  # Update learning rate
-
-            #print(f"size of batch tensor {[tensor.shape for tensor in batch_tensor]}")
-
-            # ## create word embedding 
-            # embed = nn.Embedding(num_embeddings=vocab_size , embedding_dim  =embedding_dim ).to(device)
-            # embedded = embed(batch_tensor) * math.sqrt(embedding_dim)
-            # print(embedded.shape)
-            # print(f"embedded: {track_variance_batch(embedded)}")
-
-
-            # ## create positional embedding
-            # positional_embedding = nn.Embedding(num_embeddings=max_length,embedding_dim  =embedding_dim ).to(device)
-            # positon_num = torch.arange(0, max_length, dtype=torch.long).to(device)  # torch.Size([max_length])
-            # positon_num = positon_num.unsqueeze(0) #  # torch.Size([1,max_length])
-            # positon_num = positon_num.expand(embedded.shape[0],max_length)  # torch.Size([batch_size,max_length])
-            # pos_embedded = positional_embedding(positon_num)
-            # print(pos_embedded.shape)
-            # print(f"pos_embedded: {track_variance_batch(pos_embedded)}")
-
-            # ## embedded + pos_embedded
-            # pos_add_embedded = embedded + pos_embedded
-            # print(pos_add_embedded.shape)
-            # print(f"pos_add_embedded: {track_variance_batch(pos_add_embedded)}")
-
-            
-            # attn_output, attn_weights_list = decoder_att(batch_tensor, mask= True)
-            # print(f"Attention output shape: {attn_output.shape}, dtype: {attn_output.dtype}")
-            # print(f"Attention weights shape: {[attn_weights.shape for attn_weights in attn_weights_list]}")
-            # print("Variance of attention output:")
-            # track_variance_batch(attn_output)
-            # print("*"*30)
-            # print(f"Variance of attention weight: {[track_variance_batch(attn_weights) for attn_weights in attn_weights_list]}")
-            
-            # break   
-
+    wandb.finish()
 
 

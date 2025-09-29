@@ -1,0 +1,73 @@
+_wandb:
+    value:
+        cli_version: 0.21.3
+        e:
+            nw5qxwdp5xlu9jienjtp4dkhjq2kxtz3:
+                cpu_count: 10
+                cpu_count_logical: 20
+                cudaVersion: "13.0"
+                disk:
+                    /:
+                        total: "1081101176832"
+                        used: "79672647680"
+                email: yatinece@gmail.com
+                executable: /opt/conda/bin/python
+                git:
+                    commit: 390af11277bef4bebe1590b4120f14899bd17a80
+                    remote: https://github.com/yatinece/decoder_learn_verify.git
+                gpu: NVIDIA GeForce RTX 3060 Ti
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      memoryTotal: "8589934592"
+                      name: NVIDIA GeForce RTX 3060 Ti
+                      uuid: GPU-b89cccee-7e68-d424-12b0-93c088114af4
+                host: fe8f901ad710
+                memory:
+                    total: "16656805888"
+                os: Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.35
+                program: -m transformer.transformer
+                python: CPython 3.11.12
+                root: /workspaces/TF_Train
+                startedAt: "2025-09-28T19:10:57.974062Z"
+                writerId: nw5qxwdp5xlu9jienjtp4dkhjq2kxtz3
+        m: []
+        python_version: 3.11.12
+        t:
+            "1":
+                - 1
+                - 49
+                - 51
+            "2":
+                - 1
+                - 49
+                - 51
+            "3":
+                - 13
+                - 16
+            "4": 3.11.12
+            "5": 0.21.3
+            "12": 0.21.3
+            "13": linux-x86_64
+batch_size:
+    value: 10
+dropout:
+    value: 0.001
+embed_dim:
+    value: 256
+epochs:
+    value: 3
+ffn_dim:
+    value: 768
+learning_rate:
+    value: 0.001
+max_length:
+    value: 1759
+num_blocks:
+    value: 4
+num_heads:
+    value: 4
+scheduler:
+    value: CosineAnnealingLR
+vocab_size:
+    value: 500

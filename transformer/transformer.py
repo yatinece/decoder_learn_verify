@@ -7,6 +7,7 @@ from config.ConfigFile import Config
 from Tokenizer.BpeToken import BpeTokenizer
 import math
 from tqdm import tqdm
+from torch.optim.lr_scheduler import LambdaLR
 import wandb
 
 def get_device():
@@ -259,7 +260,7 @@ if __name__ == "__main__":
 
     max_length=min(20000,sequence_size)
 
-    batch_size=10
+    batch_size=8
     vocab_size=meta_data_tokenizer["vocab_size"]
     embed_dim=256
     num_heads = 4
@@ -268,8 +269,13 @@ if __name__ == "__main__":
     num_blocks= 4
     lr=0.001
     type_pos_emb="learnable"
-    epochs = 3
+    epochs = 30
     tied_emb = 1
+    clip_grad=1
+    grad_clip_max_norm = 5.0  # Gradient clipping max norm
+    opt_meth ="linear+cos"
+    weight_decay=0.01
+    warmup_ratio = 0.1  # 10% of total steps
     print(f"Current stats for max_length : {max_length} , batch_size : {batch_size} , vocab_size : {vocab_size}  , data_length : {len(data)}")
 
     print(f"Current stats for num_embeddings : {vocab_size} , embedding_dim : {embed_dim} ")
@@ -282,10 +288,15 @@ if __name__ == "__main__":
         "max_length": max_length,
         "batch_size": batch_size,
         "epochs": epochs,
-        "learning_rate": 0.001,
+        "learning_rate": 0.01,
         "dropout": lr,
         "scheduler": "CosineAnnealingLR",
-        "tied_emb" : tied_emb
+        "tied_emb" : tied_emb,
+        "clip_grad" : clip_grad,
+        "grad_clip_max_norm": grad_clip_max_norm,
+        "weight_decay" : weight_decay,
+        "warmup_ratio" : warmup_ratio,
+        "opt_meth" : opt_meth
     })
     device= get_device()
     decoder_att = TransformerDecoder(vocab_size=vocab_size, embed_dim=embed_dim, num_heads=num_heads, \
@@ -293,8 +304,12 @@ if __name__ == "__main__":
         # Print total parameters and log to W&B
     total_params = count_parameters(decoder_att, detailed=True)
     wandb.config.update({"total_parameters": total_params})
+
+    steps_per_epoch = math.ceil(len(train_data) / batch_size)
+    total_steps = steps_per_epoch * epochs
+    warmup_steps = int(warmup_ratio * total_steps)
     # optimizer 
-    optimizer = torch.optim.Adam(decoder_att.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(decoder_att.parameters(), lr=lr , weight_decay=weight_decay)
     # loss
     loss_fn = nn.CrossEntropyLoss(ignore_index=0)
     best_val_loss = float('inf')
@@ -305,12 +320,23 @@ if __name__ == "__main__":
     full_model_path = os.path.join(data_path, "best_model_full.pt")
     
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    if opt_meth =="linear+cos":
+        def lr_lambda(current_step):
+            if current_step < warmup_steps:
+                return float(current_step) / max(1, warmup_steps)
+            progress = float(current_step - warmup_steps) / max(1, total_steps - warmup_steps)
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+    
+        scheduler = LambdaLR(optimizer, lr_lambda)
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
     global_step = 0  # For W&B per-batch logging
     for epoch in range(epochs):
         decoder_att.train()
         train_loss = 0.0
-        train_batches = math.ceil(len(train_data) / batch_size  )      
+        train_batches = math.ceil(len(train_data) / batch_size  )    
+        optimizer.zero_grad()  
         pbar = tqdm(range(0 ,len(train_data),batch_size) , desc=f"Epoch {epoch+1} Training", total=train_batches)
         for k in pbar:
             batch = train_data[k:k+batch_size]
@@ -323,11 +349,38 @@ if __name__ == "__main__":
 
             loss = loss_fn(output[:, :-1, :].reshape(-1, vocab_size), batch_tensor[:, 1:].reshape(-1))
             pbar.set_postfix({'Batch Loss': f'{loss.item():.4f}'})
-            optimizer.zero_grad()
+            
             loss.backward()
+            # Compute pre-clip gradient norm
+            grad_norm_pre_clip = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in decoder_att.parameters() if p.grad is not None))
+
+            # Apply gradient clipping
+            torch.nn.utils.clip_grad_norm_(decoder_att.parameters(), max_norm=grad_clip_max_norm, norm_type=2.0)
+
+            # Compute post-clip gradient norm
+            grad_norm_post_clip = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in decoder_att.parameters() if p.grad is not None))
+
+            # Verify tied embeddings for the first batch of the first epoch
+            if epoch == 0 and k == 0:
+                print("\nVerifying tied embeddings:")
+                print(f"Word embedding shape: {decoder_att.embedding_layer.embed_layer.weight.shape}")
+                print(f"FC out weight shape: {decoder_att.fc_out.weight.shape}")
+                weights_are_same = torch.equal(decoder_att.fc_out.weight, decoder_att.embedding_layer.embed_layer.weight)
+                print(f"Weights are identical: {weights_are_same}")
+                print(f"Memory address same: {id(decoder_att.fc_out.weight) == id(decoder_att.embedding_layer.embed_layer.weight)}")
+                print(f"Sample weights (first 5 elements of first row):")
+                print(f"  embedding_layer: {decoder_att.embedding_layer.embed_layer.weight[0, :5]}")
+                print(f"  fc_out: {decoder_att.fc_out.weight[0, :5]}")
+                grads_are_same = torch.equal(decoder_att.fc_out.weight.grad, decoder_att.embedding_layer.embed_layer.weight.grad)
+                print(f"Gradients are identical: {grads_are_same}")
+                print(f"Sample gradients (first 5 elements of first row):")
+                print(f"  embedding_layer: {decoder_att.embedding_layer.embed_layer.weight.grad[0, :5]}")
+                print(f"  fc_out: {decoder_att.fc_out.weight.grad[0, :5]}")
 
             # Compute gradient norms: total, per-layer, embeddings
-            grad_norm_total = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in decoder_att.parameters() if p.grad is not None))
+            grad_norm_total = grad_norm_post_clip  # Use post-clip norm
+            # Compute gradient norms: total, per-layer, embeddings
+            #grad_norm_total = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in decoder_att.parameters() if p.grad is not None))
             grad_norm_word_emb = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in decoder_att.embedding_layer.parameters() if p.grad is not None))
             grad_norm_pos_emb = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in decoder_att.pos_embedding_layer.parameters() if p.grad is not None))
             grad_norm_fc_out = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in decoder_att.fc_out.parameters() if p.grad is not None))
@@ -361,6 +414,8 @@ if __name__ == "__main__":
                 **grad_norms
             }, step=global_step)
             optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
             train_loss += loss.item()
             global_step += 1
         train_loss /= train_batches
@@ -413,7 +468,7 @@ if __name__ == "__main__":
             }, checkpoint_path)
             print(f"Saved best model at epoch {epoch+1} with Val Loss: {val_loss:.4f}")
 
-        scheduler.step()  # Update learning rate
+        #scheduler.step()  # Update learning rate
     wandb.finish()
 
 

@@ -1,1 +1,1 @@
-{"vocab_size": 500, "special_tokens": ["<PAD>", "<UNK>", "<BOS>", "<EOS>"]}
+{"vocab_size": 8000, "special_tokens": ["<PAD>", "<UNK>", "<BOS>", "<EOS>"]}

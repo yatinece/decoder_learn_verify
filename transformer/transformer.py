@@ -192,10 +192,8 @@ class TransformerDecoder(nn.Module):
         self.embedding_layer = EmbeddingLayer(self.vocab_size, self.embed_dim)
         self.pos_embedding_layer = PositionEmbeddingLayer(self.max_length, self.embed_dim)
         self.block_layers = nn.ModuleList(TransformerDecoderBlock(self.embed_dim, self.num_heads, self.ffn_dim, self.dropout) for _ in range(num_blocks) )
-        if tied_emb == 0 : 
-            self.fc_out = nn.Linear(embed_dim, vocab_size , bias=False)
-        else :
-            self.fc_out = nn.Linear(embed_dim, vocab_size , bias=False)
+        self.fc_out = nn.Linear(embed_dim, vocab_size, bias=False)
+        if tied_emb:
             self.fc_out.weight = self.embedding_layer.embed_layer.weight
         self.dropout = nn.Dropout(dropout)
 
@@ -207,7 +205,7 @@ class TransformerDecoder(nn.Module):
 
         attn_weights_list = []
         if mask is None:
-            mask = torch.tril(torch.ones(seq_len, seq_len ,device=x.device) )
+            mask = torch.tril(torch.ones(seq_len, seq_len ,device=x.device) ).bool()
             mask = mask.unsqueeze(0).unsqueeze(0).expand(batch_size, self.num_heads, seq_len, seq_len)
 
         x = self.embedding_layer(x)

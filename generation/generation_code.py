@@ -68,7 +68,7 @@ def apply_temperature_and_filtering(logits, temperature=1.0, top_k=0, top_p=1.0)
 # -------------------------------
 while True:
     print("\nEnter Text (or 'exit' to quit):")
-    input_text = input().strip()
+    input_text = input()
     if input_text.lower() == "exit":
         break
 

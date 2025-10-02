@@ -155,7 +155,7 @@ class TransformerDecoderBlock(nn.Module):
         self.norm1 =nn.LayerNorm(self.embed_dim)
         self.ffn = nn.Sequential(
             nn.Linear(self.embed_dim, self.ffn_dim),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(self.ffn_dim, self.embed_dim),
                     )
@@ -263,12 +263,12 @@ if __name__ == "__main__":
     embed_dim=256
     num_heads = 4
     dropout = 0.1
-    ffn_dim = embed_dim*3
-    num_blocks= 4
-    lr=0.001
+    ffn_dim = embed_dim*4
+    num_blocks= 2
+    lr=0.005
     type_pos_emb="learnable"
     epochs = 30
-    tied_emb = 1
+    tied_emb = 0
     clip_grad=1
     grad_clip_max_norm = 5.0  # Gradient clipping max norm
     opt_meth ="linear+cos"
@@ -286,7 +286,7 @@ if __name__ == "__main__":
         "max_length": max_length,
         "batch_size": batch_size,
         "epochs": epochs,
-        "learning_rate": 0.01,
+        "learning_rate": lr,
         "dropout": lr,
         "scheduler": "CosineAnnealingLR",
         "tied_emb" : tied_emb,
@@ -411,6 +411,7 @@ if __name__ == "__main__":
                 "Train/Batch_Loss": loss.item(),
                 **grad_norms
             }, step=global_step)
+            
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()

@@ -2,7 +2,7 @@ from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders, pr
 import json 
 from datasets.arrow_dataset import Column
 class BpeTokenizer:
-    def __init__(self, texts=None, extra_tokens=None, vocab_size=500):
+    def __init__(self, texts=None, extra_tokens=None, vocab_size=8000):
         self.vocab_size = vocab_size
         self.special_tokens = extra_tokens or ["<PAD>", "<UNK>", "<BOS>", "<EOS>"]
         

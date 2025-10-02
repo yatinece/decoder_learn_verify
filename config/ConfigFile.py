@@ -2,7 +2,7 @@ class Config:
     def __init__(self):
         self.data_path = "./data/"
         self.path = "./data/tokenizer.json"
-        self.dataset = "wikitext1"
+        self.dataset = "wikitext"
         self.batch_size_token=1024
         self.download_data_key = dict()
         self.download_data_key["wikitext"]= ("wikitext", "wikitext-2-raw-v1")

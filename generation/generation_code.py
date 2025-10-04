@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from Tokenizer.BpeToken import BpeTokenizer
 from config.ConfigFile import Config
-from transformer.transformer import *
+from transformer.transformer2 import *
 
 # -------------------------------
 # Config and setup
@@ -14,8 +14,8 @@ from transformer.transformer import *
 config = Config()
 print(dict(config.__dict__.items()))
 
-sample_method = "sample"   # "argmax" or "sample"
-temperature = 1.2          # <1.0 makes output more deterministic
+sample_method = "argmax"   # "argmax" or "sample"
+temperature = 1.0        # <1.0 makes output more deterministic
 top_k = 50                 # keep only top K tokens
 top_p = 0.6                # nucleus sampling
 max_new_tokens = 50
@@ -91,7 +91,8 @@ while True:
                 token_tensor_list = token_tensor_list_nopad[:, -model.max_length:]
 
             output, _ = model(token_tensor_list)
-            logits = output[:, -1, :]  # last token logits
+            last_token_idx = min(len(token_data) - 1, model.max_length - 1)
+            logits = output[:, last_token_idx, :]  # last token logits
 
             if sample_method == "argmax":
                 next_token = torch.argmax(logits, dim=-1)

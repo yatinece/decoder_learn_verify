@@ -67,24 +67,16 @@ class PositionEmbeddingLayer(nn.Module):
         self.embed_dim = embed_dim
         self.embed_layer = nn.Embedding(num_embeddings=self.max_length , embedding_dim  =self.embed_dim )
 
-    def learnable_position_emb(self, x):
-        seq_len = x.size(1)
-        positon_num = torch.arange(0, seq_len, dtype=torch.long , device=x.device)  # torch.Size([max_length])
-        positon_num = positon_num.unsqueeze(0) #  # torch.Size([1,max_length])
-        positon_num = positon_num.expand(x.shape[0], seq_len)  # torch.Size([batch_size,max_length])
-        return self.embed_layer(positon_num)
-
-
-    def forward(self, x , type_pos_emb="learnable"):
+    def forward(self, x, type_pos_emb="learnable"):
+        # x: [batch, seq, d_model] (already token-embedded)
         if type_pos_emb == "learnable":
-            pos_embedded = self.learnable_position_emb(x)
+            seq_len = x.size(1)
+            position_ids = torch.arange(0, seq_len, dtype=torch.long, device=x.device)
+            position_ids = position_ids.unsqueeze(0).expand(x.size(0), seq_len)
+            pos_embedded = self.embed_layer(position_ids)   # [batch, seq, d_model]
+            return x + pos_embedded
         else:
             raise ValueError(f"Method {type_pos_emb} is not implemented")
-        x = x + pos_embedded
-        
-        #print(embedded.shape)
-        #print(f"embedded: {track_variance_batch(embedded)}")
-        return x
 
 class MultiHeadSelfAttention(nn.Module):
     def __init__(self,embed_dim, num_heads ,dropout=0.1):
@@ -209,8 +201,8 @@ class TransformerDecoder(nn.Module):
             mask = mask.unsqueeze(0).unsqueeze(0).expand(batch_size, self.num_heads, seq_len, seq_len)
 
         x = self.embedding_layer(x)
-        pos_embedded = self.pos_embedding_layer(x , self.type_pos_emb)
-        x = self.dropout(x + pos_embedded)
+        x = self.pos_embedding_layer(x , self.type_pos_emb)
+        x = self.dropout(x)
 
 
         for block in self.block_layers:
@@ -246,7 +238,7 @@ if __name__ == "__main__":
     path = config_parser.path
     data_path= config_parser.data_path
     os.makedirs(data_path ,exist_ok=True)
-    data= torch.load( data_path+"encoded_dataset_fast.pt")
+    data= torch.load( data_path+"encoded_dataset_long.pt")
     with open(path+'.meta.json' ) as json_data:
         meta_data_tokenizer=json.load(json_data)
     sequence_size = get_sequence_size(data)
@@ -256,16 +248,16 @@ if __name__ == "__main__":
     train_data = data[:train_size]
     val_data = data[train_size:]
 
-    max_length=min(512,sequence_size)
+    max_length = config_parser.max_length
 
-    batch_size=8
+    batch_size=16
     vocab_size=meta_data_tokenizer["vocab_size"]
-    embed_dim=256
+    embed_dim=768
     num_heads = 4
     dropout = 0.1
     ffn_dim = embed_dim*4
     num_blocks= 4
-    lr=5e-4
+    lr=3e-4
     type_pos_emb="learnable"
     epochs = 30
     tied_emb = 1
@@ -303,6 +295,7 @@ if __name__ == "__main__":
     decoder_att = TransformerDecoder(vocab_size=vocab_size, embed_dim=embed_dim, num_heads=num_heads, \
                             ffn_dim = ffn_dim, num_blocks= num_blocks, max_length =max_length ,dropout=dropout , type_pos_emb=type_pos_emb , tied_emb =tied_emb).to(device)
         # Print total parameters and log to W&B
+    #decoder_att = torch.compile(decoder_att, backend="inductor", mode="max-autotune", dynamic=True)
     total_params = count_parameters(decoder_att, detailed=True)
     wandb.config.update({"total_parameters": total_params})
 
@@ -323,10 +316,10 @@ if __name__ == "__main__":
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     if opt_meth =="linear+cos":
         def lr_lambda(current_step):
-            batch_step = current_step * accumulation_steps
-            if batch_step < warmup_steps:
-                return float(batch_step) / max(1, warmup_steps)
-            progress = float(batch_step - warmup_steps) / max(1, total_steps - warmup_steps)
+            #batch_step = current_step * accumulation_steps
+            if current_step < warmup_steps:
+                return float(current_step) / max(1, warmup_steps)
+            progress = float(current_step - warmup_steps) / max(1, total_steps - warmup_steps)
             return 0.5 * (1.0 + math.cos(math.pi * progress))
     
         scheduler = LambdaLR(optimizer, lr_lambda)
@@ -334,15 +327,18 @@ if __name__ == "__main__":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
     global_step = 0  # For W&B per-batch logging
+    optimizer.zero_grad() 
     for epoch in range(epochs):
         decoder_att.train()
         train_loss = 0.0
         train_batches = math.ceil(len(train_data) / batch_size  )    
-        optimizer.zero_grad()  
+         
         pbar = tqdm(range(0 ,len(train_data),batch_size) , desc=f"Epoch {epoch+1} Training", total=train_batches)
         for k in pbar:
             batch = train_data[k:k+batch_size]
-            #print(batch)
+            #batch = train_data[0:1]
+            # print(f"epoch : {epoch}")
+            # print(f"k : {k}")   
             vector_list = convert_listbatch_to_listtensor(batch, device, max_length, dtype=torch.long)
             #print(f"size of batch {[vector.shape for vector in vector_list]}")
             batch_tensor = pad_sequence_list(vector_list,max_length,pad_token_id=0)
@@ -358,7 +354,26 @@ if __name__ == "__main__":
             
             # Compute pre-clip gradient norm (only for logging, post-accumulation)
             grad_norm_pre_clip = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in decoder_att.parameters() if p.grad is not None))
-
+                # Verify tied embeddings for the first batch of the first epoch
+            if epoch == 0 and k == 0:
+                print("\nVerifying tied embeddings:")
+                print(f"Word embedding shape: {decoder_att.embedding_layer.embed_layer.weight.shape}")
+                print(f"FC out weight shape: {decoder_att.fc_out.weight.shape}")
+                weights_are_same = torch.equal(decoder_att.fc_out.weight, decoder_att.embedding_layer.embed_layer.weight)
+                print(f"Weights are identical: {weights_are_same}")
+                print(f"Memory address same: {id(decoder_att.fc_out.weight) == id(decoder_att.embedding_layer.embed_layer.weight)}")
+                print(f"Sample weights (first 5 elements of first row):")
+                print(f"  embedding_layer: {decoder_att.embedding_layer.embed_layer.weight[0, :5]}")
+                print(f"  fc_out: {decoder_att.fc_out.weight[0, :5]}")
+                grads_are_same = torch.equal(decoder_att.fc_out.weight.grad, decoder_att.embedding_layer.embed_layer.weight.grad)
+                print(f"Gradients are identical: {grads_are_same}")
+                print(f"Sample gradients (first 5 elements of first row):")
+                print(f"  embedding_layer: {decoder_att.embedding_layer.embed_layer.weight.grad[0, :5]}")
+                print(f"  fc_out: {decoder_att.fc_out.weight.grad[0, :5]}")
+                print(f"size of batch {[vector.shape for vector in vector_list]}")
+                print(f"X: {batch_tensor}")
+                #print(f"X: { torch.argmax(output[:, :-1, :].reshape(-1, vocab_size), dim=-1)}")
+                print(f"y: {batch_tensor[:, 1:]}")
             # Apply gradient clipping only when stepping
             should_step = ((global_step + 1) % accumulation_steps == 0)
             if should_step:
@@ -366,22 +381,7 @@ if __name__ == "__main__":
                 torch.nn.utils.clip_grad_norm_(decoder_att.parameters(), max_norm=grad_clip_max_norm, norm_type=2.0)
                 grad_norm_post_clip = torch.sqrt(sum(p.grad.norm(2) ** 2 for p in decoder_att.parameters() if p.grad is not None))
 
-                # Verify tied embeddings for the first batch of the first epoch
-                if epoch == 0 and k == 0:
-                    print("\nVerifying tied embeddings:")
-                    print(f"Word embedding shape: {decoder_att.embedding_layer.embed_layer.weight.shape}")
-                    print(f"FC out weight shape: {decoder_att.fc_out.weight.shape}")
-                    weights_are_same = torch.equal(decoder_att.fc_out.weight, decoder_att.embedding_layer.embed_layer.weight)
-                    print(f"Weights are identical: {weights_are_same}")
-                    print(f"Memory address same: {id(decoder_att.fc_out.weight) == id(decoder_att.embedding_layer.embed_layer.weight)}")
-                    print(f"Sample weights (first 5 elements of first row):")
-                    print(f"  embedding_layer: {decoder_att.embedding_layer.embed_layer.weight[0, :5]}")
-                    print(f"  fc_out: {decoder_att.fc_out.weight[0, :5]}")
-                    grads_are_same = torch.equal(decoder_att.fc_out.weight.grad, decoder_att.embedding_layer.embed_layer.weight.grad)
-                    print(f"Gradients are identical: {grads_are_same}")
-                    print(f"Sample gradients (first 5 elements of first row):")
-                    print(f"  embedding_layer: {decoder_att.embedding_layer.embed_layer.weight.grad[0, :5]}")
-                    print(f"  fc_out: {decoder_att.fc_out.weight.grad[0, :5]}")
+
 
                 # Compute gradient norms: total, per-layer, embeddings (post-clip, post-accumulation)
                 grad_norm_total = grad_norm_post_clip  # Use post-clip norm
@@ -513,6 +513,7 @@ if __name__ == "__main__":
             print(f"Epoch {epoch+1}, Val Loss: {val_loss:.4f}, Val Perplexity: {val_perplexity:.4f}")
 
         # Checkpointing
+        #torch.save(decoder_att , full_model_path)
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save(decoder_att , full_model_path)

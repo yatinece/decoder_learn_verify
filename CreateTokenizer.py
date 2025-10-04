@@ -30,6 +30,8 @@ if __name__ == "__main__":
     dataset = config_parser.dataset
     path = config_parser.path
     data_path= config_parser.data_path
+    max_length = config_parser.max_length  # From your training config; adjust as needed
+    stride = int(max_length * 0.9)  # 10% overlap; tune 0.8-0.95 for more/less density
     os.makedirs(data_path ,exist_ok=True)
     ## Load data sets
     train_texts = load_dataset_all(download_data_key,dataset)
@@ -37,10 +39,10 @@ if __name__ == "__main__":
     print(train_texts[:5])
 
     ## config BpeTokenizer
-    bpetoken = BpeTokenizer(train_texts)
+    #bpetoken = BpeTokenizer(train_texts)
 
     ## Save tokenizer
-    bpetoken.save(path)
+    #bpetoken.save(path)
 
     ## Load tokenizer 
     bpe2 = BpeTokenizer.load(path)
@@ -86,3 +88,39 @@ if __name__ == "__main__":
     print(f"Save time Fast: {elapsed:.2f} sec | {elapsed/60:.2f} min | {elapsed/3600:.2f} hr")
     print(f"few rows {encoded_dataset[:3]}")
 
+
+    print(f"full text of all concatenated")
+    separator = '\n\n'  # Or ' ' if lines are sentences; preserves article structure
+    all_data = separator.join([t.strip() for t in train_texts if t.strip()])
+    print(f"few rows train_texts :  {train_texts[:3]}")
+    print(f"few rows all_data : {all_data[:300]}")
+
+    print("Encoding full text...")
+    start_time = time.time()
+    full_encoded = bpe2.tokenizer.encode(all_data)  # Single encode; adds no BOS/EOS here (handle in chunks)
+    torch.save(full_encoded, data_path + "full_encoded.pt")
+    full_ids = full_encoded.ids
+    torch.save(full_ids, data_path + "full_ids.pt")
+    elapsed = time.time() - start_time
+    print(f"Full encode time: {elapsed:.2f} sec")
+
+    encoded_dataset = []
+
+    for i in tqdm(range(0, len(full_ids) - max_length + 1, stride), desc="Chunking sequences"):
+        chunk_ids = full_ids[i:i + max_length]
+        if len(chunk_ids) < max_length * 0.5:  # Skip tiny tail
+            break
+        # Wrap with specials (mimic per-text)
+        bos_id = bpe2.tokenizer.token_to_id("<BOS>")
+        eos_id = bpe2.tokenizer.token_to_id("<EOS>")
+        wrapped_chunk = [bos_id] + chunk_ids + [eos_id]
+        encoded_dataset.append(wrapped_chunk[:max_length])  # Trim if over (rare)
+
+    print(f"Created {len(encoded_dataset)} sequences (avg len: {np.mean([len(seq) for seq in encoded_dataset]):.0f})")
+
+    # Save (use fast if available, but single encode is already fast)
+    start_time = time.time()
+    torch.save(encoded_dataset, data_path + "encoded_dataset_long.pt")
+    elapsed = time.time() - start_time
+    print(f"Save time: {elapsed:.2f} sec")
+    print(f"Few rows: {encoded_dataset[:3]}")

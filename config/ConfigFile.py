@@ -2,8 +2,10 @@ class Config:
     def __init__(self):
         self.data_path = "./data/"
         self.path = "./data/tokenizer.json"
-        self.dataset = "wikitext"
+        self.dataset = "imdb"
         self.batch_size_token=1024
+        self.max_length = 512
+        self.stride = int(self.max_length * 0.9)
         self.download_data_key = dict()
         self.download_data_key["wikitext"]= ("wikitext", "wikitext-2-raw-v1")
         self.download_data_key["wikitext1"]= ("wikitext", "wikitext-103-raw-v1")

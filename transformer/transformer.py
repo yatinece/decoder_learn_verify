@@ -246,7 +246,7 @@ if __name__ == "__main__":
     path = config_parser.path
     data_path= config_parser.data_path
     os.makedirs(data_path ,exist_ok=True)
-    data= torch.load( data_path+"encoded_dataset_fast.pt")
+    data= torch.load( data_path+"encoded_dataset_long.pt")
     with open(path+'.meta.json' ) as json_data:
         meta_data_tokenizer=json.load(json_data)
     sequence_size = get_sequence_size(data)
@@ -256,11 +256,11 @@ if __name__ == "__main__":
     train_data = data[:train_size]
     val_data = data[train_size:]
 
-    max_length=min(20000,sequence_size)
+    max_length=min(512,sequence_size)
 
     batch_size=8
     vocab_size=meta_data_tokenizer["vocab_size"]
-    embed_dim=256
+    embed_dim=512
     num_heads = 4
     dropout = 0.1
     ffn_dim = embed_dim*4
@@ -268,7 +268,7 @@ if __name__ == "__main__":
     lr=0.005
     type_pos_emb="learnable"
     epochs = 30
-    tied_emb = 0
+    tied_emb = 1
     clip_grad=1
     grad_clip_max_norm = 5.0  # Gradient clipping max norm
     opt_meth ="linear+cos"

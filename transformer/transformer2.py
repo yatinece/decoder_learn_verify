@@ -219,17 +219,17 @@ if __name__ == "__main__":
     batch_size = 16
     vocab_size = meta_data_tokenizer["vocab_size"]
     embed_dim = 768
-    num_heads = 4
+    num_heads = 12
     dropout = 0.1
     ffn_dim = embed_dim * 4
-    num_blocks = 4
-    lr = 3e-4  # CRITICAL FIX: Was 5e-3
-    epochs = 30
+    num_blocks = 12
+    lr = 8e-4  
+    epochs = 128
     tied_emb = 1
     grad_clip_max_norm = 1.0
     opt_meth = "linear+cos"
     weight_decay = 0.01
-    warmup_ratio = 0.1
+    warmup_ratio = 0.15
     accumulation_steps = 8
     
     print(f"Current stats for max_length : {max_length} , batch_size : {batch_size} , vocab_size : {vocab_size}  , data_length : {len(data)}")
@@ -286,9 +286,10 @@ if __name__ == "__main__":
     # FIXED: Correct scheduler without multiplying by accumulation_steps
     def lr_lambda(current_step):
         # current_step is already the optimizer step count
-        if current_step < warmup_steps:
-            return float(current_step) / max(1, warmup_steps)
-        progress = float(current_step - warmup_steps) / max(1, total_steps - warmup_steps)
+        act_step = accumulation_steps*current_step
+        if act_step < warmup_steps:
+            return float(act_step) / max(1, warmup_steps)
+        progress = float(act_step - warmup_steps) / max(1, total_steps - warmup_steps)
         return 0.5 * (1.0 + math.cos(math.pi * progress))
     
     scheduler = LambdaLR(optimizer, lr_lambda)

@@ -84,6 +84,8 @@ ipython_config.py
 data/best_model_dict.pt 
 data/full_encoded.pt 
 data/best_model_full.pt
+data/archive (1).zip
+data/BookCorpus3.csv
 # pyenv
 #   For a library or package, you might want to ignore these files since the code is
 #   intended to run in multiple environments; otherwise, check them in:

@@ -4,7 +4,7 @@ class Config:
         self.path = "./data/tokenizer.json"
         self.dataset = "imdb"
         self.batch_size_token=1024
-        self.max_length = 512
+        self.max_length = 128 #512
         self.stride = int(self.max_length * 0.9)
         self.download_data_key = dict()
         self.download_data_key["wikitext"]= ("wikitext", "wikitext-2-raw-v1")
